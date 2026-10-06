@@ -99,12 +99,13 @@ type TokenResult struct {
 }
 
 type clientMetadata struct {
-	ClientName              string   `json:"client_name"`
-	RedirectURIs            []string `json:"redirect_uris"`
-	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
-	GrantTypes              []string `json:"grant_types"`
-	ResponseTypes           []string `json:"response_types"`
-	Scope                   string   `json:"scope"`
+	ClientName                        string   `json:"client_name"`
+	RedirectURIs                      []string `json:"redirect_uris"`
+	TokenEndpointAuthMethod           string   `json:"token_endpoint_auth_method"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	GrantTypes                        []string `json:"grant_types"`
+	ResponseTypes                     []string `json:"response_types"`
+	Scope                             string   `json:"scope"`
 }
 
 func NewService(db *bun.DB, tokens *apitokens.Service) *Service {
@@ -395,7 +396,9 @@ func validateClientMetadata(metadata clientMetadata, redirectURI, scope string) 
 	if len(metadata.RedirectURIs) == 0 || !slices.Contains(metadata.RedirectURIs, redirectURI) {
 		return ErrInvalidClient
 	}
-	if metadata.TokenEndpointAuthMethod != "" && metadata.TokenEndpointAuthMethod != "none" {
+	// Clients may prefer another method while also supporting our public PKCE flow.
+	if metadata.TokenEndpointAuthMethod != "" && metadata.TokenEndpointAuthMethod != "none" &&
+		!slices.Contains(metadata.TokenEndpointAuthMethodsSupported, "none") {
 		return ErrInvalidClient
 	}
 	if len(metadata.GrantTypes) > 0 && !slices.Contains(metadata.GrantTypes, "authorization_code") {
