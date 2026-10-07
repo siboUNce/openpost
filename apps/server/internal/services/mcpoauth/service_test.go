@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -108,6 +109,99 @@ func TestCreateAndExchangeCodeWithClientMetadata(t *testing.T) {
 		Resource:     "https://app.openpost.test/mcp",
 	})
 	require.ErrorIs(t, err, ErrInvalidGrant)
+}
+
+func TestCreateAuthorizationCodeWithPublicClientMetadata(t *testing.T) {
+	t.Parallel()
+
+	const redirectURI = "https://client.example/oauth/callback"
+	for _, tc := range []struct {
+		name      string
+		method    string
+		supported []string
+		redirect  string
+		grants    []string
+		responses []string
+		scope     string
+		wantErr   error
+	}{
+		{name: "none", method: "none"},
+		{name: "empty method"},
+		{name: "preferred private key JWT with public auth", method: "private_key_jwt", supported: []string{"none", "private_key_jwt"}},
+		{name: "private key JWT only", method: "private_key_jwt", supported: []string{"private_key_jwt"}, wantErr: ErrInvalidClient},
+		{name: "unsupported secret auth", method: "client_secret_basic", wantErr: ErrInvalidClient},
+		{name: "other preferred method with public auth", method: "client_secret_basic", supported: []string{"none"}},
+		{name: "redirect mismatch", method: "private_key_jwt", supported: []string{"none"}, redirect: "https://client.example/other", wantErr: ErrInvalidClient},
+		{name: "missing authorization code grant", method: "private_key_jwt", supported: []string{"none"}, grants: []string{"client_credentials"}, wantErr: ErrInvalidClient},
+		{name: "missing code response", method: "private_key_jwt", supported: []string{"none"}, responses: []string{"token"}, wantErr: ErrInvalidClient},
+		{name: "unsupported metadata scope", method: "private_key_jwt", supported: []string{"none"}, scope: "mcp:read admin", wantErr: ErrUnsupportedScope},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			db := newMCPOAuthTestDB(t)
+			seedMCPOAuthUser(ctx, t, db)
+			metadata := map[string]any{
+				"client_name":                           "Public PKCE client",
+				"redirect_uris":                         []string{redirectURI},
+				"token_endpoint_auth_method":            tc.method,
+				"token_endpoint_auth_methods_supported": tc.supported,
+				"grant_types":                           []string{"authorization_code"},
+				"response_types":                        []string{"code"},
+				"scope":                                 "mcp:read",
+			}
+			if tc.grants != nil {
+				metadata["grant_types"] = tc.grants
+			}
+			if tc.responses != nil {
+				metadata["response_types"] = tc.responses
+			}
+			if tc.scope != "" {
+				metadata["scope"] = tc.scope
+			}
+			client := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(metadata)
+			}))
+			t.Cleanup(client.Close)
+			service := NewService(db, apitokens.NewService(db))
+			service.SetHTTPClient(client.Client())
+			requestedRedirect := redirectURI
+			if tc.redirect != "" {
+				requestedRedirect = tc.redirect
+			}
+			verifier := strings.Repeat("p", 43)
+			created, err := service.CreateAuthorizationCode(ctx, AuthorizationRequest{
+				UserID:              "user-1",
+				ResponseType:        "code",
+				ClientID:            client.URL + "/client.json",
+				RedirectURI:         requestedRedirect,
+				Scope:               "mcp:read",
+				CodeChallenge:       pkceChallenge(verifier),
+				CodeChallengeMethod: CodeChallengeMethodS256,
+				ExpectedResource:    "https://app.openpost.test/mcp",
+			})
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Nil(t, created)
+				return
+			}
+			require.NoError(t, err)
+			exchanged, err := service.ExchangeCode(ctx, TokenRequest{
+				GrantType:    "authorization_code",
+				Code:         created.Code,
+				RedirectURI:  requestedRedirect,
+				ClientID:     client.URL + "/client.json",
+				CodeVerifier: verifier,
+				Resource:     "https://app.openpost.test/mcp",
+			})
+			require.NoError(t, err)
+			principal, err := apitokens.NewService(db).ValidateToken(ctx, exchanged.AccessToken)
+			require.NoError(t, err)
+			require.Equal(t, "mcp:read", principal.Scope)
+			require.Equal(t, "https://app.openpost.test/mcp", principal.Audience)
+		})
+	}
 }
 
 func TestCreateAuthorizationCodeRejectsRedirectOutsideClientMetadata(t *testing.T) {
