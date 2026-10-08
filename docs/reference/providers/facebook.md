@@ -66,6 +66,26 @@ Direct messages, Comments and replies, and Analytics are optional and per connec
 
 Analytics is an optional feature per connected Facebook Page. It starts off for a new account. Enable it after connection or in Account details. OpenPost collects Page follower totals and published-post reactions, comments, and shares when enabled. It uses `pages_read_engagement`, keeps missing counters distinct from measured zero, and does not use deprecated Page impression metrics. Disabling Analytics stops future Facebook analytics collection without deleting stored metrics or revoking authorization.
 
+## One-time historical post import
+
+The account post-import API supports an explicit one-time Facebook Page history scan. Send `PUT /api/v1/accounts/{account_id}/post-imports` with:
+
+```json
+{
+  "workspace_id": "your-workspace-id",
+  "enabled": false,
+  "historical": { "action": "start", "start_date": "2024-01-01T00:00:00Z" }
+}
+```
+
+Omit `start_date` for all API-available history. The start instant is inclusive; use an RFC3339 offset to select midnight in your local timezone. Use `historical.action` of `pause` or `resume`, without a date, to preserve and continue the same checkpoint. With `historical` present, `enabled` does not change ongoing imports; save that choice separately without `historical`. A history scan cannot be restarted or have its date changed after starting. Read its status from `historical` in the existing GET response, and view stored posts through the same read-only imported library.
+
+History uses the existing Page `GET /posts` reader, account daily read budget, pagination, worker jobs, and duplicate prevention. It never publishes, edits, or deletes Facebook content, and never resets the ongoing import checkpoint. Exhausted budgets and rate limits retain progress; resuming preserves any provider retry delay.
+
+The selected Page token must have `pages_read_engagement`; account discovery uses `pages_show_list`. OpenPost checks the saved grant before starting and on every run. Missing permissions require reconnecting; a saved permission does not prove that Meta will authorize a live request. Visitor posts require separate `pages_read_user_content` access and are excluded from this Page-authored import.
+
+“All available” means posts Meta returns for this Page and token, not a guaranteed complete Facebook archive. Deleted, inaccessible, unsupported, or API-restricted content cannot be recovered. Finishing pagination means the API scan ended. The read-only library stores the reader's text, publication time, and permalink projection, not an original-media archive. Consult Meta's [Page feed reference](https://developers.facebook.com/docs/graph-api/reference/page/feed/) and [permissions reference](https://developers.facebook.com/docs/permissions/) for current availability and review requirements.
+
 ## Troubleshooting
 
 - `facebook account has no manageable pages` usually means the authenticated user has no eligible Pages, lacks full control of the Page, or the app lacks `business_management` or `pages_show_list`. Business Portfolio Pages require `business_management` for discovery.

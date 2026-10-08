@@ -9950,6 +9950,26 @@ export interface components {
             /** @description Health status */
             status: string;
         };
+        HistoricalImportInput: {
+            /** @enum {string} */
+            action: "start" | "pause" | "resume";
+            /**
+             * Format: date-time
+             * @description Start instant (RFC3339); omit for all API-available history. Only valid for start.
+             */
+            start_date?: string;
+        };
+        HistoricalStatus: {
+            enabled: boolean;
+            failure_message?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            /** Format: date-time */
+            next_eligible_at?: string;
+            /** Format: date-time */
+            start_date?: string;
+            status: string;
+        };
         IdentityAuditEvent: {
             action: string;
             actor_user_id?: string;
@@ -12179,6 +12199,7 @@ export interface components {
             account_id: string;
             enabled: boolean;
             failure_message?: string;
+            historical?: components["schemas"]["HistoricalStatus"];
             /** Format: date-time */
             last_success_at?: string;
             next_cursor?: string;
@@ -14184,6 +14205,8 @@ export interface components {
             readonly $schema?: string;
             /** @description Whether native post imports are enabled */
             enabled: boolean;
+            /** @description Explicit one-time Facebook Page history action; leaves the ongoing import choice unchanged */
+            historical?: components["schemas"]["HistoricalImportInput"];
             /** @description Workspace ID */
             workspace_id: string;
         };

@@ -1619,26 +1619,30 @@ type ImportedPost struct {
 type PostImportState struct {
 	bun.BaseModel `bun:"table:post_import_states"`
 
-	ID                string    `bun:",pk" json:"id"`
-	WorkspaceID       string    `bun:"workspace_id,notnull" json:"workspace_id"`
-	SocialAccountID   string    `bun:"social_account_id,notnull,unique" json:"social_account_id"`
-	Platform          string    `bun:",notnull" json:"platform"`
-	Enabled           bool      `bun:",notnull,default:true" json:"enabled"`
-	Status            string    `bun:",notnull,default:'partial'" json:"status"`
-	Cursor            string    `bun:",notnull,default:''" json:"-"`
-	ImportWatermark   time.Time `bun:"import_watermark,nullzero" json:"import_watermark,omitempty"`
-	CycleStartedAt    time.Time `bun:"cycle_started_at,nullzero" json:"-"`
-	InitialFinishedAt time.Time `bun:"initial_finished_at,nullzero" json:"initial_finished_at,omitempty"`
-	InitialItemsSeen  int       `bun:"initial_items_seen,notnull,default:0" json:"initial_items_seen"`
-	ReadBudgetStart   time.Time `bun:"read_budget_start,nullzero" json:"-"`
-	ReadBudgetUsed    int       `bun:"read_budget_used,notnull,default:0" json:"-"`
-	LastAttemptedAt   time.Time `bun:"last_attempted_at,nullzero" json:"last_attempted_at,omitempty"`
-	LastSuccessAt     time.Time `bun:"last_success_at,nullzero" json:"last_success_at,omitempty"`
-	FailureCode       string    `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`
-	FailureMessage    string    `bun:"failure_message,notnull,default:''" json:"failure_message,omitempty"`
-	NextEligibleAt    time.Time `bun:"next_eligible_at,nullzero" json:"next_eligible_at,omitempty"`
-	CreatedAt         time.Time `bun:",nullzero,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt         time.Time `bun:",nullzero,notnull,default:current_timestamp" json:"updated_at"`
+	ID                    string    `bun:",pk" json:"id"`
+	WorkspaceID           string    `bun:"workspace_id,notnull" json:"workspace_id"`
+	SocialAccountID       string    `bun:"social_account_id,notnull,unique" json:"social_account_id"`
+	Platform              string    `bun:",notnull" json:"platform"`
+	Enabled               bool      `bun:",notnull,default:true" json:"enabled"`
+	Status                string    `bun:",notnull,default:'partial'" json:"status"`
+	Cursor                string    `bun:",notnull,default:''" json:"-"`
+	ImportWatermark       time.Time `bun:"import_watermark,nullzero" json:"import_watermark,omitempty"`
+	CycleStartedAt        time.Time `bun:"cycle_started_at,nullzero" json:"-"`
+	InitialFinishedAt     time.Time `bun:"initial_finished_at,nullzero" json:"initial_finished_at,omitempty"`
+	InitialItemsSeen      int       `bun:"initial_items_seen,notnull,default:0" json:"initial_items_seen"`
+	ReadBudgetStart       time.Time `bun:"read_budget_start,nullzero" json:"-"`
+	ReadBudgetUsed        int       `bun:"read_budget_used,notnull,default:0" json:"-"`
+	LastAttemptedAt       time.Time `bun:"last_attempted_at,nullzero" json:"last_attempted_at,omitempty"`
+	LastSuccessAt         time.Time `bun:"last_success_at,nullzero" json:"last_success_at,omitempty"`
+	FailureCode           string    `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`
+	FailureMessage        string    `bun:"failure_message,notnull,default:''" json:"failure_message,omitempty"`
+	NextEligibleAt        time.Time `bun:"next_eligible_at,nullzero" json:"next_eligible_at,omitempty"`
+	CreatedAt             time.Time `bun:",nullzero,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt             time.Time `bun:",nullzero,notnull,default:current_timestamp" json:"updated_at"`
+	HistoryEnabled        bool      `bun:"history_enabled,notnull,default:false" json:"-"`
+	HistoryJSON           string    `bun:"history_json,notnull,default:''" json:"-"`
+	HistoryNextEligibleAt time.Time `bun:"history_next_eligible_at,nullzero" json:"-"`
+	Historical            bool      `bun:"-" json:"-"`
 }
 
 // AnalyticsAccountSnapshot is an immutable provider measurement. MetricsJSON

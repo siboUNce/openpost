@@ -84,6 +84,39 @@ func TestNativePostReadersAtHTTPBoundary(t *testing.T) {
 	}
 }
 
+func TestFacebookNativeHistoryWindowUsesOnlyPageReads(t *testing.T) {
+	original := httpClient
+	t.Cleanup(func() { httpClient = original })
+	for _, all := range []bool{true, false} {
+		t.Run(map[bool]string{true: "all", false: "start_date"}[all], func(t *testing.T) {
+			httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.True(t, strings.HasSuffix(r.URL.Path, "/42/posts"))
+				require.Equal(t, "Bearer fixture", r.Header.Get("Authorization"))
+				if all {
+					require.Empty(t, r.URL.Query().Get("since"))
+				} else {
+					require.NotEmpty(t, r.URL.Query().Get("since"))
+				}
+				body := `{"data":[{"id":"42_old","message":"history","created_time":"2010-01-01T00:00:00+0000","permalink_url":"https://www.facebook.com/42/posts/old","from":{"id":"42"}}]}`
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			request := NativePostRequest{AccountID: "42", PageSize: 50}
+			if !all {
+				request.PublishedAfter = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			}
+			page, err := NewFacebookAdapter("", "", "").ListNativePosts(t.Context(), "fixture", request)
+			require.NoError(t, err)
+			if all {
+				require.Len(t, page.Items, 1)
+				require.Equal(t, ImportedPostOriginExternal, page.Items[0].Origin)
+			} else {
+				require.Empty(t, page.Items)
+			}
+		})
+	}
+}
+
 func TestYouTubeNativeImportsUseVideoPublicationTimeAndChannel(t *testing.T) {
 	original := httpClient
 	t.Cleanup(func() { httpClient = original })

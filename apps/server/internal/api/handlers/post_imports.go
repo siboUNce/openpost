@@ -33,9 +33,15 @@ type ReadPostImportsInput struct {
 type SavePostImportsInput struct {
 	AccountID string `path:"account_id" doc:"Connected account ID"`
 	Body      struct {
-		WorkspaceID string `json:"workspace_id" required:"true" doc:"Workspace ID"`
-		Enabled     bool   `json:"enabled" required:"true" doc:"Whether native post imports are enabled"`
+		WorkspaceID string                 `json:"workspace_id" required:"true" doc:"Workspace ID"`
+		Enabled     bool                   `json:"enabled" required:"true" doc:"Whether native post imports are enabled"`
+		Historical  *HistoricalImportInput `json:"historical,omitempty" doc:"Explicit one-time Facebook Page history action; leaves the ongoing import choice unchanged"`
 	}
+}
+
+type HistoricalImportInput struct {
+	Action    string     `json:"action" enum:"start,pause,resume" required:"true"`
+	StartDate *time.Time `json:"start_date,omitempty" doc:"Start instant (RFC3339); omit for all API-available history. Only valid for start."`
 }
 
 type ImportedPostResponse struct {
@@ -47,17 +53,18 @@ type ImportedPostResponse struct {
 }
 
 type PostImportOverviewResponse struct {
-	AccountID         string                 `json:"account_id"`
-	Platform          string                 `json:"platform"`
-	Supported         bool                   `json:"supported"`
-	UnavailableReason string                 `json:"unavailable_reason,omitempty"`
-	Enabled           bool                   `json:"enabled"`
-	Status            string                 `json:"status"`
-	LastSuccessAt     *time.Time             `json:"last_success_at,omitempty"`
-	NextEligibleAt    *time.Time             `json:"next_eligible_at,omitempty"`
-	FailureMessage    string                 `json:"failure_message,omitempty"`
-	Posts             []ImportedPostResponse `json:"posts"`
-	NextCursor        string                 `json:"next_cursor,omitempty"`
+	AccountID         string                       `json:"account_id"`
+	Platform          string                       `json:"platform"`
+	Supported         bool                         `json:"supported"`
+	UnavailableReason string                       `json:"unavailable_reason,omitempty"`
+	Enabled           bool                         `json:"enabled"`
+	Status            string                       `json:"status"`
+	LastSuccessAt     *time.Time                   `json:"last_success_at,omitempty"`
+	NextEligibleAt    *time.Time                   `json:"next_eligible_at,omitempty"`
+	FailureMessage    string                       `json:"failure_message,omitempty"`
+	Posts             []ImportedPostResponse       `json:"posts"`
+	NextCursor        string                       `json:"next_cursor,omitempty"`
+	Historical        *postimport.HistoricalStatus `json:"historical,omitempty"`
 }
 
 type PostImportOverviewOutput struct {
@@ -109,7 +116,12 @@ func (h *PostImportHandler) RegisterRoutes(api huma.API) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("could not read post imports")
 		}
-		if input.Body.Enabled {
+		if input.Body.Historical != nil {
+			err = h.service.SetHistoricalImport(ctx, workspaceID, input.AccountID, input.Body.Historical.Action, input.Body.Historical.StartDate)
+			if errors.Is(err, postimport.ErrHistoricalChoice) || errors.Is(err, postimport.ErrImportChanged) {
+				return nil, huma.Error409Conflict(err.Error())
+			}
+		} else if input.Body.Enabled {
 			if !current.Support.Supported {
 				return nil, huma.Error409Conflict(current.Support.UnavailableReason)
 			}
@@ -141,6 +153,10 @@ func (h *PostImportHandler) read(ctx context.Context, workspaceID, accountID, cu
 		Posts: make([]ImportedPostResponse, 0, len(overview.Posts)), NextCursor: overview.NextCursor,
 	}
 	if overview.State != nil {
+		response.Historical, err = postimport.ReadHistoricalStatus(overview.State)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("could not read historical import state")
+		}
 		response.Enabled = overview.State.Enabled
 		response.Status = overview.State.Status
 		response.FailureMessage = overview.State.FailureMessage

@@ -33,6 +33,7 @@ var ErrAccountNotFound = errors.New("post import account not found")
 var ErrInvalidCursor = errors.New("invalid post import cursor")
 
 var errImportChanged = errors.New("post import choice changed during sync")
+var ErrImportChanged = errImportChanged
 
 // Policy is instance-owned rate policy. It is provider-overridable but never
 // workspace-controlled. ReadRequestsPerDay counts every listing request that
@@ -331,8 +332,7 @@ func (s *Service) EnqueueDue(ctx context.Context) (int, error) {
 	now := s.now().UTC()
 	var states []models.PostImportState
 	if err := s.db.NewSelect().Model(&states).
-		Where("enabled = ?", true).
-		Where("(next_eligible_at IS NULL OR next_eligible_at <= ?)", now).
+		Where("((enabled = ? AND (next_eligible_at IS NULL OR next_eligible_at <= ?)) OR (history_enabled = ? AND (history_next_eligible_at IS NULL OR history_next_eligible_at <= ?)))", true, now, true, now).
 		Where("social_account_id IN (SELECT id FROM social_accounts WHERE is_active = ?)", true).
 		Where("social_account_id NOT IN (SELECT dedupe_key FROM jobs WHERE type = ? AND status IN (?, ?))", JobTypeSync, jobregistry.StatusPending, jobregistry.StatusProcessing).
 		Order("next_eligible_at ASC").
@@ -395,10 +395,17 @@ func (s *Service) loadState(ctx context.Context, accountID string) (*models.Post
 	return state, nil
 }
 
-// SyncAccount runs one bounded import cycle: at most maxPages provider reads,
-// each page committed with its checkpoint so a crash resumes from the stored
-// cursor on retry without duplicating committed pages.
+// SyncAccount runs the ongoing cycle, then an explicitly enabled historical
+// cycle. Each is bounded by maxPages and both share the account read budget.
+// Pages commit with their checkpoint so retries resume without duplicates.
 func (s *Service) SyncAccount(ctx context.Context, workspaceID, accountID string) (err error) {
+	if err := s.syncAccount(ctx, workspaceID, accountID, false); err != nil {
+		return err
+	}
+	return s.syncAccount(ctx, workspaceID, accountID, true)
+}
+
+func (s *Service) syncAccount(ctx context.Context, workspaceID, accountID string, historical bool) (err error) {
 	defer func() {
 		if errors.Is(err, errImportChanged) {
 			err = nil
@@ -406,7 +413,7 @@ func (s *Service) SyncAccount(ctx context.Context, workspaceID, accountID string
 	}()
 
 	now := s.now().UTC()
-	prepared, err := s.prepareSync(ctx, workspaceID, accountID, now)
+	prepared, err := s.prepareSync(ctx, workspaceID, accountID, now, historical)
 	if err != nil || prepared == nil {
 		return err
 	}
@@ -490,8 +497,8 @@ type syncPreparation struct {
 // prepareSync resolves the reader, credentials, and window for one import
 // cycle. A nil preparation with a nil error means the account is not due;
 // every recorded outcome leaves the account connected.
-func (s *Service) prepareSync(ctx context.Context, workspaceID, accountID string, now time.Time) (*syncPreparation, error) {
-	account, state, policy, proceed, err := s.loadImportEligibility(ctx, workspaceID, accountID, now)
+func (s *Service) prepareSync(ctx context.Context, workspaceID, accountID string, now time.Time, historical bool) (*syncPreparation, error) {
+	account, state, policy, proceed, err := s.loadImportEligibility(ctx, workspaceID, accountID, now, historical)
 	if err != nil || !proceed {
 		return nil, err
 	}
@@ -512,6 +519,9 @@ func (s *Service) prepareSync(ctx context.Context, workspaceID, accountID string
 			"account_token_unavailable", "Reconnect this account to continue importing native posts.", now.Add(permissionRetry), now)
 	}
 	publishedAfter := state.ImportWatermark
+	if state.Historical && !publishedAfter.IsZero() {
+		publishedAfter = publishedAfter.Add(-time.Nanosecond)
+	}
 	if !state.InitialFinishedAt.IsZero() && !state.LastSuccessAt.IsZero() {
 		publishedAfter = state.LastSuccessAt.Add(-watermarkOverlap)
 		if publishedAfter.Before(state.ImportWatermark) {
@@ -540,7 +550,7 @@ func (s *Service) prepareSync(ctx context.Context, workspaceID, accountID string
 // read-cost policy, provider support, and cadence. Proceed is false when the
 // account is not due or when an outcome was already recorded; a recorded
 // outcome surfaces as a nil error so the job does not retry a settled state.
-func (s *Service) loadImportEligibility(ctx context.Context, workspaceID, accountID string, now time.Time) (models.SocialAccount, *models.PostImportState, Policy, bool, error) {
+func (s *Service) loadImportEligibility(ctx context.Context, workspaceID, accountID string, now time.Time, historical bool) (models.SocialAccount, *models.PostImportState, Policy, bool, error) {
 	account, err := s.loadAccount(ctx, workspaceID, accountID)
 	if err != nil {
 		return account, nil, Policy{}, false, err
@@ -548,6 +558,12 @@ func (s *Service) loadImportEligibility(ctx context.Context, workspaceID, accoun
 	state, err := s.loadState(ctx, account.ID)
 	if err != nil {
 		return account, nil, Policy{}, false, err
+	}
+	if historical {
+		state, err = historicalState(state)
+		if err != nil {
+			return account, nil, Policy{}, false, err
+		}
 	}
 	if state == nil || !state.Enabled {
 		return account, state, Policy{}, false, nil
@@ -645,12 +661,19 @@ func (s *Service) commitPage(ctx context.Context, account models.SocialAccount, 
 		state.FailureMessage = ""
 		state.LastAttemptedAt = now
 		state.UpdatedAt = now
-		result, err := tx.NewUpdate().Model(state).WherePK().Where("enabled = ? AND import_watermark = ?", true, state.ImportWatermark).Exec(txCtx)
+		query, checkpoint, err := checkpointUpdate(tx.NewUpdate().Model(state).WherePK(), state)
+		if err != nil {
+			return err
+		}
+		result, err := query.Exec(txCtx)
 		if err := importUpdateResult(result, err); err != nil {
 			return err
 		}
+		if state.Historical {
+			state.HistoryJSON = checkpoint
+		}
 		for _, item := range items {
-			if !item.PublishedAt.After(state.ImportWatermark) {
+			if (!state.Historical && !item.PublishedAt.After(state.ImportWatermark)) || (state.Historical && item.PublishedAt.Before(state.ImportWatermark)) {
 				continue
 			}
 			item, err := platform.NormalizeNativePostItem(item)
@@ -708,20 +731,36 @@ func (s *Service) reserveBudget(state *models.PostImportState, dailyLimit, cost 
 
 func (s *Service) persistBudget(ctx context.Context, state *models.PostImportState, now time.Time) error {
 	state.UpdatedAt = now
-	result, err := s.db.NewUpdate().Model(state).
+	if state.Historical {
+		return s.executeCheckpoint(ctx, s.db.NewUpdate().Model(state).WherePK(), state)
+	}
+	query := s.db.NewUpdate().Model(state).
 		Set("read_budget_start = ?", state.ReadBudgetStart).
 		Set("read_budget_used = ?", state.ReadBudgetUsed).
 		Set("updated_at = ?", now).
-		WherePK().
-		Where("enabled = ? AND import_watermark = ?", true, state.ImportWatermark).
-		Exec(ctx)
+		WherePK()
+	result, err := query.Where("enabled = ? AND import_watermark = ?", true, state.ImportWatermark).Exec(ctx)
 	return importUpdateResult(result, err)
 }
 
 func (s *Service) saveState(ctx context.Context, state *models.PostImportState) error {
 	state.UpdatedAt = s.now().UTC()
-	result, err := s.db.NewUpdate().Model(state).WherePK().Where("enabled = ? AND import_watermark = ?", true, state.ImportWatermark).Exec(ctx)
-	return importUpdateResult(result, err)
+	return s.executeCheckpoint(ctx, s.db.NewUpdate().Model(state).WherePK(), state)
+}
+
+func (s *Service) executeCheckpoint(ctx context.Context, query *bun.UpdateQuery, state *models.PostImportState) error {
+	query, checkpoint, err := checkpointUpdate(query, state)
+	if err != nil {
+		return err
+	}
+	result, err := query.Exec(ctx)
+	if err := importUpdateResult(result, err); err != nil {
+		return err
+	}
+	if state.Historical {
+		state.HistoryJSON = checkpoint
+	}
+	return nil
 }
 
 func (s *Service) recordOutcome(ctx context.Context, state *models.PostImportState, status platform.NativePostStatus, code, message string, eligibleAt, now time.Time) error {

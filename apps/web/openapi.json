@@ -8763,6 +8763,50 @@
 				"required": ["status"],
 				"type": "object"
 			},
+			"HistoricalImportInput": {
+				"additionalProperties": false,
+				"properties": {
+					"action": {
+						"enum": ["start", "pause", "resume"],
+						"type": "string"
+					},
+					"start_date": {
+						"description": "Start instant (RFC3339); omit for all API-available history. Only valid for start.",
+						"format": "date-time",
+						"type": "string"
+					}
+				},
+				"required": ["action"],
+				"type": "object"
+			},
+			"HistoricalStatus": {
+				"additionalProperties": false,
+				"properties": {
+					"enabled": {
+						"type": "boolean"
+					},
+					"failure_message": {
+						"type": "string"
+					},
+					"finished_at": {
+						"format": "date-time",
+						"type": "string"
+					},
+					"next_eligible_at": {
+						"format": "date-time",
+						"type": "string"
+					},
+					"start_date": {
+						"format": "date-time",
+						"type": "string"
+					},
+					"status": {
+						"type": "string"
+					}
+				},
+				"required": ["enabled", "status"],
+				"type": "object"
+			},
 			"IdentityAuditEvent": {
 				"additionalProperties": false,
 				"properties": {
@@ -14254,6 +14298,9 @@
 					"failure_message": {
 						"type": "string"
 					},
+					"historical": {
+						"$ref": "#/components/schemas/HistoricalStatus"
+					},
 					"last_success_at": {
 						"format": "date-time",
 						"type": "string"
@@ -18893,6 +18940,10 @@
 					"enabled": {
 						"description": "Whether native post imports are enabled",
 						"type": "boolean"
+					},
+					"historical": {
+						"$ref": "#/components/schemas/HistoricalImportInput",
+						"description": "Explicit one-time Facebook Page history action; leaves the ongoing import choice unchanged"
 					},
 					"workspace_id": {
 						"description": "Workspace ID",

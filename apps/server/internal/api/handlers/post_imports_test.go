@@ -20,7 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/pgdriver"
+	"github.com/uptrace/bun/driver/sqliteshim"
 )
 
 func TestPostImportsCanBeEnabledReadAndDisabledWithinWorkspace(t *testing.T) {
@@ -30,7 +32,18 @@ func TestPostImportsCanBeEnabledReadAndDisabledWithinWorkspace(t *testing.T) {
 		(*models.ImportedPost)(nil), (*models.Job)(nil),
 	}
 	t.Run("sqlite", func(t *testing.T) {
-		testPostImportsLifecycle(t, createHandlerTestDB(t, modelsToCreate...))
+		// Match the application's portable SQLite driver without requiring a
+		// platform-specific C compiler just to exercise the account API.
+		sqldb, err := sql.Open(sqliteshim.ShimName, ":memory:")
+		require.NoError(t, err)
+		sqldb.SetMaxOpenConns(1)
+		db := bun.NewDB(sqldb, sqlitedialect.New())
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		for _, model := range modelsToCreate {
+			_, err := db.NewCreateTable().Model(model).Exec(t.Context())
+			require.NoError(t, err)
+		}
+		testPostImportsLifecycle(t, db)
 	})
 	t.Run("postgres", func(t *testing.T) {
 		dsn := os.Getenv("OPENPOST_TEST_POSTGRES_URL")
@@ -162,4 +175,24 @@ func testPostImportsLifecycle(t *testing.T, db *bun.DB) {
 
 	res = request(http.MethodGet, "/api/v1/accounts/account-1/post-imports?workspace_id=workspace-2", nil)
 	require.Equal(t, http.StatusNotFound, res.Code, res.Body.String())
+
+	// Local API acceptance: history is explicit, scoped, and leaves normal
+	// imports disabled unless the caller separately enables them.
+	_, err = db.NewInsert().Model(&models.SocialAccount{ID: "facebook-history", WorkspaceID: "workspace-1", Slug: "facebook-history", Platform: "facebook", AccountID: "page-1", GrantedScopes: "pages_read_engagement", AccessTokenEnc: []byte("fixture"), IsActive: true, CreatedAt: now}).Exec(ctx)
+	require.NoError(t, err)
+	historyPath := "/api/v1/accounts/facebook-history/post-imports"
+	for _, action := range []string{"start", "pause", "resume"} {
+		res = request(http.MethodPut, historyPath, map[string]any{"workspace_id": "workspace-1", "enabled": false, "historical": map[string]any{"action": action}})
+		require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+		var result PostImportOverviewResponse
+		require.NoError(t, json.Unmarshal(res.Body.Bytes(), &result))
+		require.False(t, result.Enabled)
+		require.NotNil(t, result.Historical)
+		require.Equal(t, action != "pause", result.Historical.Enabled)
+		require.NotContains(t, res.Body.String(), "history_json")
+	}
+	res = request(http.MethodPut, historyPath, map[string]any{"workspace_id": "workspace-2", "enabled": false, "historical": map[string]any{"action": "pause"}})
+	require.Equal(t, http.StatusNotFound, res.Code, res.Body.String())
+	res = request(http.MethodPut, historyPath, map[string]any{"workspace_id": "workspace-1", "enabled": false, "historical": map[string]any{"action": "start"}})
+	require.Equal(t, http.StatusConflict, res.Code, res.Body.String())
 }
