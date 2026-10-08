@@ -818,8 +818,6 @@ func isTikTokVideoMime(mimeType string) bool {
 func tiktokScopes() []string {
 	return []string{
 		"user.info.basic",
-		"user.info.profile",
-		"user.info.stats",
 		"video.list",
 		"video.publish",
 		"video.upload",

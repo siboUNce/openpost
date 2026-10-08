@@ -37,11 +37,16 @@ func TestTikTokGenerateAuthURL(t *testing.T) {
 	if query.Get("state") != "state-123" {
 		t.Fatalf("unexpected state %q", query.Get("state"))
 	}
-	if !strings.Contains(query.Get("scope"), "video.publish") {
-		t.Fatalf("expected video.publish scope, got %q", query.Get("scope"))
+	scope := query.Get("scope")
+	for _, expected := range []string{"user.info.basic", "video.list", "video.publish", "video.upload"} {
+		if !strings.Contains(scope, expected) {
+			t.Fatalf("expected %s scope, got %q", expected, scope)
+		}
 	}
-	if !strings.Contains(query.Get("scope"), "user.info.stats") || !strings.Contains(query.Get("scope"), "video.list") {
-		t.Fatalf("expected analytics read scopes, got %q", query.Get("scope"))
+	for _, excluded := range []string{"user.info.profile", "user.info.stats"} {
+		if strings.Contains(scope, excluded) {
+			t.Fatalf("did not expect %s scope, got %q", excluded, scope)
+		}
 	}
 }
 
